@@ -1,0 +1,15 @@
+# Compiled outputs                                                                                                                                                         
+*.o
+*.out                                                                                                                                                                      
+hangman         
+hangman_*
+inspector
+*.dSYM/
+
+# Editor / OS
+.vscode/                                                                                                                                                                   
+.DS_Store       
+*.swp
+
+# Build dirs
+build/
