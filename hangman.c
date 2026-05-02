@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,65 @@ typedef struct {
     int max_wrong;      /* deliberately adjacent to name — overflow flips lives */
 } GameState;
 
+/* ------------------------------------------------------------------
+ * Inspector instrumentation.
+ *
+ * When INSPECTOR_LOG=<path> is set in the environment, the program
+ * writes one event per line to that path. A separate Python program
+ * (inspector.py) reads the file and renders a live ASCII view of
+ * stack and heap.
+ *
+ * If INSPECTOR_LOG is not set, all inspector_* calls are no-ops —
+ * default behaviour is unchanged.
+ * ------------------------------------------------------------------ */
+
+static FILE *inspector_fp = NULL;
+
+static void inspector_init(void) {
+    const char *path = getenv("INSPECTOR_LOG");
+    if (!path) return;
+    inspector_fp = fopen(path, "w");
+    if (!inspector_fp) return;
+    setvbuf(inspector_fp, NULL, _IOLBF, 0);  /* line-buffered */
+}
+
+static void inspector_emit(const char *fmt, ...) {
+    if (!inspector_fp) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(inspector_fp, fmt, ap);
+    fputc('\n', inspector_fp);
+    va_end(ap);
+}
+
+static void inspector_alloc(void *addr, size_t size, const char *label) {
+    inspector_emit("ALLOC %p %zu %s", addr, size, label);
+}
+
+static void inspector_free(void *addr) {
+    inspector_emit("FREE %p", addr);
+}
+
+static void inspector_write(void *addr, const char *value) {
+    inspector_emit("WRITE %p \"%s\"", addr, value);
+}
+
+static void inspector_stack(void *addr, size_t size, const char *label) {
+    inspector_emit("STACK %p %zu %s", addr, size, label);
+}
+
+static void inspector_field(void *parent, size_t offset, size_t size,
+                            const char *name, const char *value) {
+    inspector_emit("FIELD parent=%p offset=%zu size=%zu name=%s value=%s",
+                   parent, offset, size, name, value);
+}
+
+static void inspector_note(const char *msg) {
+    inspector_emit("NOTE %s", msg);
+}
+
+/* ------------------------------------------------------------------ */
+
 static char **load_words(const char *path, int *count) {
     FILE *f = fopen(path, "r");
     if (!f) {
@@ -24,6 +84,7 @@ static char **load_words(const char *path, int *count) {
     int capacity = 16;
     int n = 0;
     char **words = malloc(capacity * sizeof(char *));
+    inspector_alloc(words, capacity * sizeof(char *), "words[]");
 
     char line[64];
     while (fgets(line, sizeof line, f)) {
@@ -36,10 +97,17 @@ static char **load_words(const char *path, int *count) {
         if (n == capacity) {
             capacity *= 2;
             words = realloc(words, capacity * sizeof(char *));
+            inspector_note("realloc words[] grew");
         }
 
         words[n] = malloc(len + 1);
         memcpy(words[n], line, len + 1);
+
+        char label[32];
+        snprintf(label, sizeof label, "word[%d]", n);
+        inspector_alloc(words[n], len + 1, label);
+        inspector_write(words[n], words[n]);
+
         n++;
     }
 
@@ -50,8 +118,10 @@ static char **load_words(const char *path, int *count) {
 
 static void free_words(char **words, int count) {
     for (int i = 0; i < count; i++) {
+        inspector_free(words[i]);
         free(words[i]);
     }
+    inspector_free(words);
     free(words);
 }
 
@@ -60,8 +130,10 @@ static GameState new_game(char *secret, int max_wrong) {
     gs.secret = secret;
     gs.len = strlen(secret);
     gs.mask = malloc(gs.len + 1);
+    inspector_alloc(gs.mask, gs.len + 1, "mask");
     for (size_t i = 0; i < gs.len; i++) gs.mask[i] = '_';
     gs.mask[gs.len] = '\0';
+    inspector_write(gs.mask, gs.mask);
     memset(gs.name, 0, sizeof gs.name);
     gs.wrong = 0;
     gs.max_wrong = max_wrong;
@@ -69,7 +141,34 @@ static GameState new_game(char *secret, int max_wrong) {
     return gs;
 }
 
+static void inspector_dump_state(const GameState *gs) {
+    inspector_stack((void *)gs, sizeof *gs, "GameState");
+    char buf[64];
+    snprintf(buf, sizeof buf, "%p", (void *)gs->secret);
+    inspector_field((void *)gs, offsetof(GameState, secret),
+                    sizeof gs->secret, "secret", buf);
+    snprintf(buf, sizeof buf, "%p", (void *)gs->mask);
+    inspector_field((void *)gs, offsetof(GameState, mask),
+                    sizeof gs->mask, "mask", buf);
+    snprintf(buf, sizeof buf, "%zu", gs->len);
+    inspector_field((void *)gs, offsetof(GameState, len),
+                    sizeof gs->len, "len", buf);
+    snprintf(buf, sizeof buf, "%d", gs->wrong);
+    inspector_field((void *)gs, offsetof(GameState, wrong),
+                    sizeof gs->wrong, "wrong", buf);
+    snprintf(buf, sizeof buf, "%zu", gs->remaining);
+    inspector_field((void *)gs, offsetof(GameState, remaining),
+                    sizeof gs->remaining, "remaining", buf);
+    snprintf(buf, sizeof buf, "'%.16s'", gs->name);
+    inspector_field((void *)gs, offsetof(GameState, name),
+                    sizeof gs->name, "name", buf);
+    snprintf(buf, sizeof buf, "%d", gs->max_wrong);
+    inspector_field((void *)gs, offsetof(GameState, max_wrong),
+                    sizeof gs->max_wrong, "max_wrong", buf);
+}
+
 static void free_game(GameState *gs) {
+    inspector_free(gs->mask);
     free(gs->mask);
 }
 
@@ -89,6 +188,8 @@ static int do_turn(GameState *gs, char guess) {
     }
     if (hits > 0) gs->remaining -= hits;
     else gs->wrong++;
+    inspector_write(gs->mask, gs->mask);
+    inspector_dump_state(gs);
     return hits;
 }
 
@@ -127,6 +228,9 @@ static void read_name(GameState *gs) {
 }
 
 int main(void) {
+    inspector_init();
+    inspector_note("program start");
+
     srand((unsigned)time(NULL));
 
     int n = 0;
@@ -134,10 +238,13 @@ int main(void) {
 
     int idx = rand() % n;
     GameState gs = new_game(words[idx], 6);
+    inspector_dump_state(&gs);
 
     show_struct_layout();
     show_counters(&gs, "before name input");
     read_name(&gs);
+    inspector_dump_state(&gs);
+    inspector_note("name input complete (overflow may have happened)");
     show_counters(&gs, "after name input");
 
     printf("welcome %.16s! the word has %zu letters.\n\n", gs.name, gs.len);
@@ -166,17 +273,19 @@ int main(void) {
     if (!leak) {
         free_game(&gs);
         free_words(words, n);
+    } else {
+        inspector_note("LEAK=1 — skipping cleanup, valgrind will see leaks");
     }
 
     /* Use-after-free demo: gs.secret points into words[idx], which we just
-     * freed. Reading it now is a UAF.
-     *   ./hangman_asan with USE_AFTER_FREE=1     → ASan red wall
-     *   valgrind ./hangman with USE_AFTER_FREE=1 → "Invalid read of size N"
-     * Default build may print correct-looking output by luck — that's the
-     * danger of UAFs: tests can pass while the bug is still present. */
+     * freed. Reading it now is a UAF. */
     if (uaf && !leak) {
+        inspector_note("UAF — reading freed memory");
         printf("\n[UAF demo] reading freed memory at gs.secret = \"%s\"\n",
                gs.secret);
     }
+
+    inspector_note("program end");
+    if (inspector_fp) fclose(inspector_fp);
     return 0;
 }
