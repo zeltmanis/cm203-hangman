@@ -17,3 +17,4 @@ demos/*.bin
 
 # Build dirs
 build/
+__pycache__/
