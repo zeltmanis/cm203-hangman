@@ -1,14 +1,18 @@
-# Compiled outputs                                                                                                                                                         
+# Compiled outputs
 *.o
-*.out                                                                                                                                                                      
-hangman         
+*.out
+hangman
 hangman_*
 inspector
 *.dSYM/
 
+# Demo binaries (keep .c files, ignore built artifacts)
+demos/*_asan
+demos/*.bin
+
 # Editor / OS
-.vscode/                                                                                                                                                                   
-.DS_Store       
+.vscode/
+.DS_Store
 *.swp
 
 # Build dirs

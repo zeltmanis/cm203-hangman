@@ -7,12 +7,12 @@ CFLAGS_COMMON = -Wall -Wextra -g -std=c11
 #   -no-pie               fixed load address, easier to reason about
 CFLAGS_DEMO = $(CFLAGS_COMMON) -O0 -fno-stack-protector -no-pie
 
-# Sanitizer build: catches the same overflow + leaks + use-after-free
+# Sanitizer build: catches stack-local overflows + leaks + use-after-free
 CFLAGS_ASAN = $(CFLAGS_COMMON) -fsanitize=address -fsanitize=undefined
 
 SRCS = hangman.c
 
-.PHONY: all asan clean
+.PHONY: all asan asan_demo clean
 
 all: hangman
 
@@ -22,5 +22,12 @@ hangman: $(SRCS)
 asan: $(SRCS)
 	$(CC) $(CFLAGS_ASAN) -o hangman_asan $(SRCS)
 
+# Companion ASan demo: a stack-local overflow ASan catches cleanly,
+# in contrast to the intra-struct overflow in the main game which it misses.
+asan_demo: demos/name_overflow_asan
+
+demos/name_overflow_asan: demos/name_overflow.c
+	$(CC) $(CFLAGS_ASAN) -o $@ $<
+
 clean:
-	rm -f hangman hangman_asan *.o
+	rm -f hangman hangman_asan demos/name_overflow_asan *.o
