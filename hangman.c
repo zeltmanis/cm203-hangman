@@ -158,7 +158,12 @@ int main(void) {
         printf("you lose, %.16s. the word was \"%s\"\n", gs.name, gs.secret);
     }
 
-    free_game(&gs);
-    free_words(words, n);
+    /* Cleanup is skipped when LEAK=1 — used to demonstrate the leak under
+     * valgrind. With LEAK=1 we leak gs.mask plus every word in the array
+     * plus the array itself. */
+    if (getenv("LEAK") == NULL) {
+        free_game(&gs);
+        free_words(words, n);
+    }
     return 0;
 }
