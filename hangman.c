@@ -158,12 +158,25 @@ int main(void) {
         printf("you lose, %.16s. the word was \"%s\"\n", gs.name, gs.secret);
     }
 
-    /* Cleanup is skipped when LEAK=1 — used to demonstrate the leak under
-     * valgrind. With LEAK=1 we leak gs.mask plus every word in the array
-     * plus the array itself. */
-    if (getenv("LEAK") == NULL) {
+    /* Cleanup is skipped when LEAK=1 — demonstrates the leak under valgrind.
+     * With LEAK=1 we leak gs.mask plus every word plus the array itself. */
+    const int leak = getenv("LEAK") != NULL;
+    const int uaf  = getenv("USE_AFTER_FREE") != NULL;
+
+    if (!leak) {
         free_game(&gs);
         free_words(words, n);
+    }
+
+    /* Use-after-free demo: gs.secret points into words[idx], which we just
+     * freed. Reading it now is a UAF.
+     *   ./hangman_asan with USE_AFTER_FREE=1     → ASan red wall
+     *   valgrind ./hangman with USE_AFTER_FREE=1 → "Invalid read of size N"
+     * Default build may print correct-looking output by luck — that's the
+     * danger of UAFs: tests can pass while the bug is still present. */
+    if (uaf && !leak) {
+        printf("\n[UAF demo] reading freed memory at gs.secret = \"%s\"\n",
+               gs.secret);
     }
     return 0;
 }
