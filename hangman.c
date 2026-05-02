@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,8 +9,9 @@ typedef struct {
     char *mask;
     size_t len;
     int wrong;
-    int max_wrong;
     size_t remaining;
+    char name[16];      /* unsafe scanf target */
+    int max_wrong;      /* deliberately adjacent to name — overflow flips lives */
 } GameState;
 
 static char **load_words(const char *path, int *count) {
@@ -60,6 +62,7 @@ static GameState new_game(char *secret, int max_wrong) {
     gs.mask = malloc(gs.len + 1);
     for (size_t i = 0; i < gs.len; i++) gs.mask[i] = '_';
     gs.mask[gs.len] = '\0';
+    memset(gs.name, 0, sizeof gs.name);
     gs.wrong = 0;
     gs.max_wrong = max_wrong;
     gs.remaining = gs.len;
@@ -89,6 +92,40 @@ static int do_turn(GameState *gs, char guess) {
     return hits;
 }
 
+static void show_struct_layout(void) {
+    printf("--- GameState layout ---\n");
+    printf("  sizeof(GameState)        = %zu\n", sizeof(GameState));
+    printf("  offsetof(secret)         = %zu\n", offsetof(GameState, secret));
+    printf("  offsetof(mask)           = %zu\n", offsetof(GameState, mask));
+    printf("  offsetof(len)            = %zu\n", offsetof(GameState, len));
+    printf("  offsetof(wrong)          = %zu\n", offsetof(GameState, wrong));
+    printf("  offsetof(remaining)      = %zu\n", offsetof(GameState, remaining));
+    printf("  offsetof(name)           = %zu\n", offsetof(GameState, name));
+    printf("  offsetof(max_wrong)      = %zu  <-- right after name[16]\n",
+           offsetof(GameState, max_wrong));
+    printf("------------------------\n\n");
+}
+
+static void show_counters(const GameState *gs, const char *when) {
+    printf("--- counters %s ---\n", when);
+    printf("  &gs.name      = %p   gs.name      = \"%.16s\"\n",
+           (void *)gs->name, gs->name);
+    printf("  &gs.max_wrong = %p   gs.max_wrong = %d\n",
+           (void *)&gs->max_wrong, gs->max_wrong);
+    printf("  &gs.wrong     = %p   gs.wrong     = %d\n",
+           (void *)&gs->wrong, gs->wrong);
+    printf("---------------------------------\n\n");
+}
+
+/* Deliberately UNSAFE: scanf("%s") has no length check.
+ * Compiles with a warning, which is the point. */
+static void read_name(GameState *gs) {
+    printf("enter your name: ");
+    scanf("%s", gs->name);
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF) {} /* drain rest of line */
+}
+
 int main(void) {
     srand((unsigned)time(NULL));
 
@@ -97,6 +134,13 @@ int main(void) {
 
     int idx = rand() % n;
     GameState gs = new_game(words[idx], 6);
+
+    show_struct_layout();
+    show_counters(&gs, "before name input");
+    read_name(&gs);
+    show_counters(&gs, "after name input");
+
+    printf("welcome %.16s! the word has %zu letters.\n\n", gs.name, gs.len);
 
     while (gs.remaining > 0 && gs.wrong < gs.max_wrong) {
         print_mask(&gs);
@@ -109,9 +153,9 @@ int main(void) {
 
     if (gs.remaining == 0) {
         print_mask(&gs);
-        printf("you win!\n");
+        printf("you win, %.16s!\n", gs.name);
     } else {
-        printf("you lose. the word was \"%s\"\n", gs.secret);
+        printf("you lose, %.16s. the word was \"%s\"\n", gs.name, gs.secret);
     }
 
     free_game(&gs);
